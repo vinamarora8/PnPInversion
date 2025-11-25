@@ -5,3 +5,5 @@ output
 *.csv
 *.out
 *.bash
+output.*
+evaluation
