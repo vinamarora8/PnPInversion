@@ -1,10 +1,30 @@
 # PnPInversion
 
-For xformers on an RTX5090:
+## My edits
+
+Just to make PnP work.
+
+Install requirements with
+```bash
+uv venv venv -p 3.9
+source venv/bin/activate
+uv pip install -r pnp/requirements.txt
 ```
+
+For xformers on an RTX5090:
+```bash
 uv pip install -v --no-build-isolation -U git+https://github.com/facebookresearch/xformers.git@v0.0.31.post1
 ```
 
+
+### Run PnP
+
+```bash
+python pnp/run.py
+```
+
+
+# Original README
 This repository contains the implementation of the ICLR2024 paper "PnP Inversion: Boosting Diffusion-based Editing with 3 Lines of Code" 
 
 Keywords: Diffusion Model, Image Inversion, Image Editing
