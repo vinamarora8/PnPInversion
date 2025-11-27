@@ -133,7 +133,8 @@ def parse_args():
     parser.add_argument('--output_path', type=str, default="output") # the editing category that needed to run
     parser.add_argument('--edit_category_list', nargs = '+', type=str, default=["0","1","2","3","4","5","6","7","8","9"]) # the editing category that needed to run
     # parser.add_argument('--edit_method_list', nargs = '+', type=str, default=["ddim+pnp","directinversion+pnp"]) # the editing methods that needed to run
-    parser.add_argument('--edit_method_list', nargs = '+', type=str, default=["directinversion+pnp"]) # the editing methods that needed to run
+    # parser.add_argument('--edit_method_list', nargs = '+', type=str, default=["directinversion+pnp"]) # the editing methods that needed to run
+    parser.add_argument('--edit_method_list', nargs = '+', type=str, default=["ddim+pnp"]) # the editing methods that needed to run
     args = parser.parse_args()
     return args
 

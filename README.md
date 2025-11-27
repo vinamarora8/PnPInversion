@@ -1,5 +1,9 @@
 # PnPInversion
 
+For xformers on an RTX5090:
+```
+uv pip install -v --no-build-isolation -U git+https://github.com/facebookresearch/xformers.git@v0.0.31.post1
+```
 
 This repository contains the implementation of the ICLR2024 paper "PnP Inversion: Boosting Diffusion-based Editing with 3 Lines of Code" 
 

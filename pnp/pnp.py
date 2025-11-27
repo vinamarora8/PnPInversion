@@ -109,7 +109,8 @@ class PNP(nn.Module):
         return edited_img
 
     def sample_loop(self, x,guidance_scale,noisy_latent):
-        with torch.autocast(device_type='cuda', dtype=torch.float32):
+        #with torch.autocast(device_type='cuda', dtype=torch.float32):
+        with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
             for i, t in tqdm(enumerate(self.scheduler.timesteps), desc="Sampling"):
                 x = self.denoise_step(x, t,guidance_scale,noisy_latent[-1-i])
 
@@ -181,7 +182,10 @@ def register_attention_control_efficient(model, injection_schedule):
                     assert "I don't know how to handle this!"
 
                 z = xformers.ops.memory_efficient_attention(
-                    q, k, v, attn_bias=None, op=None, scale=self.scale
+                    q, k, v, 
+                    attn_bias=None,
+                    op=xformers.ops.MemoryEfficientAttentionFlashAttentionOp,
+                    scale=self.scale,
                 )
                 z = head_reshape_rev(z)
                 return to_out(z)
