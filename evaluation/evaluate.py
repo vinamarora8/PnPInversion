@@ -1,10 +1,12 @@
+from pathlib import Path
 import json
 import argparse
 import os
 import numpy as np
 from PIL import Image
 import csv
-from evaluation.matrics_calculator import MetricsCalculator
+from matrics_calculator import MetricsCalculator
+from tqdm import tqdm
 
 def mask_decode(encoded_mask,image_shape=[512,512]):
     length=image_shape[0]*image_shape[1]
@@ -100,77 +102,77 @@ def calculate_metric(metrics_calculator,metric, src_image, tgt_image, src_mask, 
 all_tgt_image_folders={
     # results of comparing inversion
     # ---
-    "1_ddim+p2p":"output/ddim+p2p/annotation_images",
-    "1_null-text-inversion+p2p_a800":"output/null-text-inversion+p2p_a800/annotation_images",
-    "1_null-text-inversion+p2p_3090":"output/null-text-inversion+p2p_3090/annotation_images",
-    "1_negative-prompt-inversion+p2p":"output/negative-prompt-inversion+p2p/annotation_images",
-    "1_stylediffusion+p2p":"output/stylediffusion+p2p/annotation_images",
-    "1_directinversion+p2p":"output/directinversion+p2p/annotation_images",
+    "1_ddim+p2p":"ddim+p2p/annotation_images",
+    "1_null-text-inversion+p2p_a800":"null-text-inversion+p2p_a800/annotation_images",
+    "1_null-text-inversion+p2p_3090":"null-text-inversion+p2p_3090/annotation_images",
+    "1_negative-prompt-inversion+p2p":"negative-prompt-inversion+p2p/annotation_images",
+    "1_stylediffusion+p2p":"stylediffusion+p2p/annotation_images",
+    "1_directinversion+p2p":"directinversion+p2p/annotation_images",
     # ---
-    "1_ddim+masactrl":"output/ddim+masactrl/annotation_images",
-    "1_directinversion+masactrl":"output/directinversion+masactrl/annotation_images",
+    "1_ddim+masactrl":"ddim+masactrl/annotation_images",
+    "1_directinversion+masactrl":"directinversion+masactrl/annotation_images",
     # ---
-    "1_ddim+pix2pix-zero":"output/ddim+pix2pix-zero/annotation_images",
-    "1_directinversion+pix2pix-zero":"output/directinversion+pix2pix-zero/annotation_images",
+    "1_ddim+pix2pix-zero":"ddim+pix2pix-zero/annotation_images",
+    "1_directinversion+pix2pix-zero":"directinversion+pix2pix-zero/annotation_images",
     # ---
-    "1_ddim+pnp":"output/ddim+pnp/annotation_images",
-    "1_directinversion+pnp":"output/directinversion+pnp/annotation_images",
+    "1_ddim+pnp":"ddim+pnp/annotation_images",
+    "1_directinversion+pnp":"directinversion+pnp/annotation_images",
     # ---
     # results of comparing model-based methods
-    "2_instruct-pix2pix":"output/instruct-pix2pix/annotation_images",
-    "2_instruct-diffusion":"output/instruct-diffusion/annotation_images",
-    "2_blended-latent-diffusion":"output/blended-latent-diffusion/annotation_images",
-    "2_directinversion+p2p":"output/directinversion+p2p/annotation_images",
+    "2_instruct-pix2pix":"instruct-pix2pix/annotation_images",
+    "2_instruct-diffusion":"instruct-diffusion/annotation_images",
+    "2_blended-latent-diffusion":"blended-latent-diffusion/annotation_images",
+    "2_directinversion+p2p":"directinversion+p2p/annotation_images",
     # results of different inversion/forward guidance scale
-    "3_directinversion+p2p_guidance_0_1":"output/directinversion+p2p_guidance_0_1/annotation_images",
-    "3_directinversion+p2p_guidance_0_5":"output/directinversion+p2p_guidance_0_5/annotation_images",
-    "3_directinversion+p2p_guidance_0_25":"output/directinversion+p2p_guidance_0_25/annotation_images",
-    "3_directinversion+p2p_guidance_0_75":"output/directinversion+p2p_guidance_0_75/annotation_images",
-    "3_directinversion+p2p_guidance_1_1":"output/directinversion+p2p_guidance_1_1/annotation_images",
-    "3_directinversion+p2p_guidance_1_5":"output/directinversion+p2p_guidance_1_5/annotation_images",
-    "3_directinversion+p2p_guidance_1_25":"output/directinversion+p2p_guidance_1_25/annotation_images",
-    "3_directinversion+p2p_guidance_1_75":"output/directinversion+p2p_guidance_1_75/annotation_images",
-    "3_directinversion+p2p_guidance_25_1":"output/directinversion+p2p_guidance_25_1/annotation_images",
-    "3_directinversion+p2p_guidance_25_5":"output/directinversion+p2p_guidance_25_5/annotation_images",
-    "3_directinversion+p2p_guidance_25_25":"output/directinversion+p2p_guidance_25_25/annotation_images",
-    "3_directinversion+p2p_guidance_25_75":"output/directinversion+p2p_guidance_25_75/annotation_images",
-    "3_directinversion+p2p_guidance_5_1":"output/directinversion+p2p_guidance_5_1/annotation_images",
-    "3_directinversion+p2p_guidance_5_5":"output/directinversion+p2p_guidance_5_5/annotation_images",
-    "3_directinversion+p2p_guidance_5_25":"output/directinversion+p2p_guidance_5_25/annotation_images",
-    "3_directinversion+p2p_guidance_5_75":"output/directinversion+p2p_guidance_5_75/annotation_images",
-    "3_directinversion+p2p_guidance_75_1":"output/directinversion+p2p_guidance_75_1/annotation_images",
-    "3_directinversion+p2p_guidance_75_5":"output/directinversion+p2p_guidance_75_5/annotation_images",
-    "3_directinversion+p2p_guidance_75_25":"output/directinversion+p2p_guidance_75_25/annotation_images",
-    "3_directinversion+p2p_guidance_75_75":"output/directinversion+p2p_guidance_75_75/annotation_images",
+    "3_directinversion+p2p_guidance_0_1":"directinversion+p2p_guidance_0_1/annotation_images",
+    "3_directinversion+p2p_guidance_0_5":"directinversion+p2p_guidance_0_5/annotation_images",
+    "3_directinversion+p2p_guidance_0_25":"directinversion+p2p_guidance_0_25/annotation_images",
+    "3_directinversion+p2p_guidance_0_75":"directinversion+p2p_guidance_0_75/annotation_images",
+    "3_directinversion+p2p_guidance_1_1":"directinversion+p2p_guidance_1_1/annotation_images",
+    "3_directinversion+p2p_guidance_1_5":"directinversion+p2p_guidance_1_5/annotation_images",
+    "3_directinversion+p2p_guidance_1_25":"directinversion+p2p_guidance_1_25/annotation_images",
+    "3_directinversion+p2p_guidance_1_75":"directinversion+p2p_guidance_1_75/annotation_images",
+    "3_directinversion+p2p_guidance_25_1":"directinversion+p2p_guidance_25_1/annotation_images",
+    "3_directinversion+p2p_guidance_25_5":"directinversion+p2p_guidance_25_5/annotation_images",
+    "3_directinversion+p2p_guidance_25_25":"directinversion+p2p_guidance_25_25/annotation_images",
+    "3_directinversion+p2p_guidance_25_75":"directinversion+p2p_guidance_25_75/annotation_images",
+    "3_directinversion+p2p_guidance_5_1":"directinversion+p2p_guidance_5_1/annotation_images",
+    "3_directinversion+p2p_guidance_5_5":"directinversion+p2p_guidance_5_5/annotation_images",
+    "3_directinversion+p2p_guidance_5_25":"directinversion+p2p_guidance_5_25/annotation_images",
+    "3_directinversion+p2p_guidance_5_75":"directinversion+p2p_guidance_5_75/annotation_images",
+    "3_directinversion+p2p_guidance_75_1":"directinversion+p2p_guidance_75_1/annotation_images",
+    "3_directinversion+p2p_guidance_75_5":"directinversion+p2p_guidance_75_5/annotation_images",
+    "3_directinversion+p2p_guidance_75_25": "directinversion+p2p_guidance_75_25/annotation_images",
+    "3_directinversion+p2p_guidance_75_75":"directinversion+p2p_guidance_75_75/annotation_images",
     # results of background preservation method
-    "4_null-text-inverse+p2p_a800":"output/null-text-inversion+p2p_a800/annotation_images",
-    "4_null-text-inverse+p2p_3090":"output/null-text-inversion+p2p_3090/annotation_images",
-    "4_null-text-inversion+proximal-guidance":"output/null-text-inversion+proximal-guidance/annotation_images",
-    "4_negative-prompt-inversion+proximal-guidance":"output/negative-prompt-inversion+proximal-guidance/annotation_images",
-    "4_edit-friendly-inversion+p2p":"output/edit-friendly-inversion+p2p/annotation_images",
-    "4_edict+direct_forward":"output/edict+direct_forward/annotation_images",
-    "4_edict+p2p":"output/edict+p2p/annotation_images",
-    "4_directinversion+p2p":"output/directinversion+p2p/annotation_images",
+    "4_null-text-inverse+p2p_a800":"null-text-inversion+p2p_a800/annotation_images",
+    "4_null-text-inverse+p2p_3090":"null-text-inversion+p2p_3090/annotation_images",
+    "4_null-text-inversion+proximal-guidance":"null-text-inversion+proximal-guidance/annotation_images",
+    "4_negative-prompt-inversion+proximal-guidance":"negative-prompt-inversion+proximal-guidance/annotation_images",
+    "4_edit-friendly-inversion+p2p":"edit-friendly-inversion+p2p/annotation_images",
+    "4_edict+direct_forward":"edict+direct_forward/annotation_images",
+    "4_edict+p2p":"edict+p2p/annotation_images",
+    "4_directinversion+p2p":"directinversion+p2p/annotation_images",
     # ablation results of contrast null-text-inversion with directinversion
-    "5_ablation_directinversion_04+p2p":"output/ablation_directinversion_04+p2p/annotation_images",
-    "5_ablation_directinversion_08+p2p":"output/ablation_directinversion_08+p2p/annotation_images",
-    "5_ablation_null-latent-inversion+p2p_a800":"output/ablation_null-latent-inversion+p2p_a800/annotation_images",
-    "5_ablation_null-latent-inversion+p2p_3090":"output/ablation_null-latent-inversion+p2p_3090/annotation_images",
-    "5_ablation_null-text-inversion_single_branch+p2p_a800":"output/ablation_null-text-inversion_single_branch+p2p_a800/annotation_images",
-    "5_ablation_null-text-inversion_single_branch+p2p_3090":"output/ablation_null-text-inversion_single_branch+p2p_3090/annotation_images",
+    "5_ablation_directinversion_04+p2p":"ablation_directinversion_04+p2p/annotation_images",
+    "5_ablation_directinversion_08+p2p":"ablation_directinversion_08+p2p/annotation_images",
+    "5_ablation_null-latent-inversion+p2p_a800":"ablation_null-latent-inversion+p2p_a800/annotation_images",
+    "5_ablation_null-latent-inversion+p2p_3090":"ablation_null-latent-inversion+p2p_3090/annotation_images",
+    "5_ablation_null-text-inversion_single_branch+p2p_a800":"ablation_null-text-inversion_single_branch+p2p_a800/annotation_images",
+    "5_ablation_null-text-inversion_single_branch+p2p_3090":"ablation_null-text-inversion_single_branch+p2p_3090/annotation_images",
     # ablation results of different intervals
-    "6_ablation_directinversion_interval_2":"output/ablation_directinversion_interval_2+p2p/annotation_images",
-    "6_ablation_directinversion_interval_5":"output/ablation_directinversion_interval_5+p2p/annotation_images",
-    "6_ablation_directinversion_interval_10":"output/ablation_directinversion_interval_10+p2p/annotation_images",
-    "6_ablation_directinversion_interval_24":"output/ablation_directinversion_interval_24+p2p/annotation_images",
-    "6_ablation_directinversion_interval_49":"output/ablation_directinversion_interval_49+p2p/annotation_images",
+    "6_ablation_directinversion_interval_2":"ablation_directinversion_interval_2+p2p/annotation_images",
+    "6_ablation_directinversion_interval_5":"ablation_directinversion_interval_5+p2p/annotation_images",
+    "6_ablation_directinversion_interval_10":"ablation_directinversion_interval_10+p2p/annotation_images",
+    "6_ablation_directinversion_interval_24":"ablation_directinversion_interval_24+p2p/annotation_images",
+    "6_ablation_directinversion_interval_49":"ablation_directinversion_interval_49+p2p/annotation_images",
     # ablation results of different steps
-    "7_ablation_directinversion_step_20":"output/ablation_directinversion_step_20+p2p/annotation_images",
-    "7_ablation_directinversion_step_100":"output/ablation_directinversion_step_100+p2p/annotation_images",
-    "7_ablation_directinversion_step_500":"output/ablation_directinversion_step_500+p2p/annotation_images",
+    "7_ablation_directinversion_step_20":"ablation_directinversion_step_20+p2p/annotation_images",
+    "7_ablation_directinversion_step_100":"ablation_directinversion_step_100+p2p/annotation_images",
+    "7_ablation_directinversion_step_500":"ablation_directinversion_step_500+p2p/annotation_images",
     # ablation results of add target latent
-    "8_ablation_directinversion_add-source+p2p":"output/ablation_directinversion_add-source+p2p/annotation_images",
-    "8_ablation_directinversion_add-target+p2p":"output/ablation_directinversion_add-target+p2p/annotation_images",
+    "8_ablation_directinversion_add-source+p2p":"ablation_directinversion_add-source+p2p/annotation_images",
+    "8_ablation_directinversion_add-target+p2p":"ablation_directinversion_add-target+p2p/annotation_images",
     }
 
 
@@ -208,6 +210,7 @@ if __name__=="__main__":
                                                                                 "9"
                                                                                 ]) # the editing category that needed to run
     parser.add_argument('--evaluate_whole_table', action= "store_true") # rerun existing images
+    parser.add_argument("--tgt_image_folder", type=Path, default="output")
 
     args = parser.parse_args()
     
@@ -223,10 +226,10 @@ if __name__=="__main__":
     if evaluate_whole_table:
         for key in all_tgt_image_folders:
             if key[0] in tgt_methods:
-                tgt_image_folders[key]=all_tgt_image_folders[key]
+                tgt_image_folders[key]=args.tgt_image_folder / all_tgt_image_folders[key]
     else:
         for key in tgt_methods:
-            tgt_image_folders[key]=all_tgt_image_folders[key]
+            tgt_image_folders[key]=args.tgt_image_folder / all_tgt_image_folders[key]
     
     result_path=args.result_path
     
@@ -246,10 +249,10 @@ if __name__=="__main__":
     with open(annotation_mapping_file,"r") as f:
         annotation_file=json.load(f)
 
-    for key, item in annotation_file.items():
+    for key, item in (pbar := tqdm(annotation_file.items())):
         if item["editing_type_id"] not in edit_category_list:
             continue
-        print(f"evaluating image {key} ...")
+        # print(f"evaluating image {key} ...")
         base_image_path=item["image_path"]
         mask=mask_decode(item["mask"])
         original_prompt = item["original_prompt"].replace("[", "").replace("]", "")
@@ -265,18 +268,22 @@ if __name__=="__main__":
         
         for tgt_image_folder_key,tgt_image_folder in tgt_image_folders.items():
             tgt_image_path=os.path.join(tgt_image_folder, base_image_path)
-            print(f"evluating method: {tgt_image_folder_key}")
+            # pbar.set_description(f"evluating method: {tgt_image_folder_key}")
             
-            tgt_image = Image.open(tgt_image_path)
-            if tgt_image.size[0] != tgt_image.size[1]:
-                # to evaluate editing
-                tgt_image = tgt_image.crop((tgt_image.size[0]-512,tgt_image.size[1]-512,tgt_image.size[0],tgt_image.size[1])) 
-                # to evaluate reconstruction
-                # tgt_image = tgt_image.crop((tgt_image.size[0]-512*2,tgt_image.size[1]-512,tgt_image.size[0]-512,tgt_image.size[1])) 
-            
-            for metric in metrics:
-                print(f"evluating metric: {metric}")
-                evaluation_result.append(calculate_metric(metrics_calculator,metric,src_image, tgt_image, mask, mask, original_prompt, editing_prompt))
+            try:
+                tgt_image = Image.open(tgt_image_path)
+                if tgt_image.size[0] != tgt_image.size[1]:
+                    # to evaluate editing
+                    tgt_image = tgt_image.crop((tgt_image.size[0]-512,tgt_image.size[1]-512,tgt_image.size[0],tgt_image.size[1])) 
+                    # to evaluate reconstruction
+                    # tgt_image = tgt_image.crop((tgt_image.size[0]-512*2,tgt_image.size[1]-512,tgt_image.size[0]-512,tgt_image.size[1])) 
+                
+                for metric in metrics:
+                    pbar.set_description(f"image: {key} | method: {tgt_image_folder_key} | metric: {metric}")
+                    evaluation_result.append(calculate_metric(metrics_calculator,metric,src_image, tgt_image, mask, mask, original_prompt, editing_prompt))
+            except:
+                print(tgt_image_path, "not found")
+                pass
                         
         with open(result_path,'a+',newline="") as f:
             csv_write = csv.writer(f)
