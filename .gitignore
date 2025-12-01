@@ -7,3 +7,5 @@ output
 *.bash
 output.*
 evaluation
+adapt_t5/outputs
+laion2B-en-aesthetic/*

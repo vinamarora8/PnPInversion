@@ -16,12 +16,15 @@ from transformers import (
 )
 from diffusers import DiffusionPipeline, DDPMScheduler
 from tqdm import tqdm
+from PIL import Image
+from laion_dataset import LaionFolderDataset
 
 
-NEG_PROMPT = "blurry, low quality, ugly"
-RUN_ID = "first"
+# NEG_PROMPT = "blurry, low quality, ugly"
+NEG_PROMPT = "ugly, blurry, black, low res, unrealistic"
+RUN_ID = "laion_local_with_mask2"
 OUTPUT_DIR = Path(__file__).parent / "outputs" / RUN_ID
-TEST_EVERY_N_STEP = 50
+TEST_EVERY_N_STEP = 100
 
 
 def main():
@@ -37,9 +40,7 @@ def main():
     device = "cuda"
 
     sd_pipe = DiffusionPipeline.from_pretrained(
-        sd_model_key,
-        # torch_dtype=torch.float16,
-        # variant="fp16",
+        sd_model_key, torch_dtype=torch.bfloat16, variant="fp16", safety_checker=None
     ).to(device)
     max_text_seq_length = sd_pipe.text_encoder.config.max_position_embeddings
     sd_pipe.enable_xformers_memory_efficient_attention()
@@ -69,6 +70,11 @@ def main():
     t5_encoder.requires_grad_(False)
     adapter.requires_grad_(True)
 
+    # dataset = AdapterDataset()
+    # dataset = LaionStreamingDataset("laion/laion2B-en-aesthetic", split="train")
+    dataset = LaionFolderDataset("laion2B-en-aesthetic/laion_100gb_512px/")
+    dataloader = DataLoader(dataset, batch_size=4, shuffle=True, num_workers=1)
+
     initial_step = 0
     if ckpt_path.exists():
         adapter.load_state_dict(torch.load(ckpt_path))
@@ -80,24 +86,24 @@ def main():
         initial_step = int(last_test_image_file.stem) + 1
         print(f"Initial step: {initial_step}")
 
-        
-
     optimizer = AdamW(adapter.parameters(), lr=1e-4)
-
-    dataset = AdapterDataset()
-    dataloader = DataLoader(dataset, batch_size=4, prefetch_factor=2, num_workers=1)
+    print(f"Num trainable parameters: {sum(p.numel() for p in adapter.parameters() if p.requires_grad)}")
 
     step = initial_step
     with torch.autocast("cuda", torch.bfloat16):
         for clean_images, captions in (pbar := tqdm(dataloader, initial=initial_step)):
             if step % TEST_EVERY_N_STEP == 0:
-                adapter.eval()
-                test_image = test_generation(t5_tokenizer, t5_encoder, adapter, sd_pipe)
-                save_path = test_image_dir / f"{step}.png"
-                test_image.save(save_path)
-                # print(f"Saved test image to {save_path}")
-                adapter.train()
+                try:
+                    adapter.eval()
+                    test_image = test_generation(
+                        t5_tokenizer, t5_encoder, adapter, sd_pipe
+                    )
+                    save_path = test_image_dir / f"{step}.png"
+                    test_image.save(save_path)
+                except Exception as e:
+                    print(f"Error saving test image: {e}")
 
+                adapter.train()
                 torch.save(adapter.state_dict(), ckpt_path)
 
             clean_images = clean_images.to(device)  # [B, 3, 512, 512]
@@ -208,46 +214,68 @@ def encode_prompt(
     ).to(text_encoder.device)
 
     with torch.no_grad():
-        text_embeds = text_encoder(text_inputs.input_ids).last_hidden_state
+        text_embeds = text_encoder(
+            text_inputs.input_ids,
+            attention_mask=text_inputs.attention_mask,
+        ).last_hidden_state
+
+    mask = text_inputs.attention_mask.unsqueeze(-1).expand_as(text_embeds)
+    text_embeds = text_embeds * mask.to(text_embeds.device)
 
     return text_embeds
 
 
-class AdapterDataset(IterableDataset):
-    def __init__(self, split="train", buffer_size=1000):
-        # 1. Use 'poloclub/diffusiondb' (contains real images, not just URLs)
-        # '2m_first_1k' is a tiny subset good for verifying the loop starts.
-        # For real training, use '2m_random_1k' or just stream the main '2m_first_10k' etc.
-        # Alternatively: "lambdalabs/pokemon-blip-captions" is extremely fast.
 
-        self.dataset = load_dataset(
-            "poloclub/diffusiondb",
-            # "2m_first_5k", # Load a specific small config for speed
-            split=split,
-            streaming=True,
-        )
+import torch
+from torch.utils.data import IterableDataset, DataLoader
+from datasets import load_dataset
+from torchvision import transforms
 
+
+class LaionStreamingDataset(IterableDataset):
+    def __init__(self, dataset_name, split="train", buffer_size=1000):
+        self.buffer_size = buffer_size
+
+        # 1. Load the dataset in streaming mode (no download)
+        self.dataset = load_dataset(dataset_name, split=split, streaming=True)
+
+        # 2. Define image transforms (Resize to 512x512 for Stable Diffusion)
         self.transform = transforms.Compose(
             [
                 transforms.Resize(512),
                 transforms.CenterCrop(512),
                 transforms.ToTensor(),
-                transforms.Normalize([0.5], [0.5]),
+                transforms.Normalize([0.5], [0.5]),  # Map to [-1, 1] for Diffusion
             ]
         )
 
     def __iter__(self):
+        # This generator yields (image_tensor, text_caption) pairs
         for sample in self.dataset:
             try:
-                # DiffusionDB keys: 'image' (PIL) and 'prompt' (Text)
-                image = sample["image"]
-                text = sample["prompt"]  # Note: key is 'prompt', not 'text'
+                # Extract data
+                # image = sample.get('image') or sample.get('jpg') # COCO uses 'image', LAION uses 'jpg'
+                url = sample.get("URL")
+                if url is None:
+                    continue
+                import requests
+                from io import BytesIO
 
+                response = requests.get(url)
+                image = Image.open(BytesIO(response.content))
+                text = sample.get("TEXT")
+
+                # Basic validation
+                if image is None or text is None:
+                    continue
+
+                # Apply transforms
                 image_tensor = self.transform(image.convert("RGB"))
+
                 yield image_tensor, text
 
             except Exception as e:
-                print(f"Skipping bad sample: {e}")
+                # Skip broken images (common in streaming datasets)
                 continue
 
 
