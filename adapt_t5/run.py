@@ -4,10 +4,8 @@ import numpy as np
 import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
-from torch.utils.data import IterableDataset, DataLoader
+from torch.utils.data import DataLoader
 from torch.optim import AdamW
-from datasets import load_dataset
-from torchvision import transforms
 from transformers import (
     T5Tokenizer,
     T5EncoderModel,
@@ -18,16 +16,31 @@ from diffusers import DiffusionPipeline, DDPMScheduler
 from tqdm import tqdm
 from PIL import Image
 from laion_dataset import LaionFolderDataset
+import wandb
+from PIL import ImageDraw, ImageFont
+import argparse
+import shutil
+
+from adapter import TextEncoderAdapter
 
 
 # NEG_PROMPT = "blurry, low quality, ugly"
 NEG_PROMPT = "ugly, blurry, black, low res, unrealistic"
-RUN_ID = "laion_local_with_mask2"
+RUN_ID = "laion_sd1p5_t5_v1_1_xxl_mlp"
+# RUN_ID = "sanity"
 OUTPUT_DIR = Path(__file__).parent / "outputs" / RUN_ID
-TEST_EVERY_N_STEP = 100
+TEST_EVERY_N_STEP = 50
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--overwrite", action="store_true")
+    args = parser.parse_args()
+
+    if args.overwrite:
+        shutil.rmtree(OUTPUT_DIR)
+        OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
     test_image_dir = OUTPUT_DIR / "test_images"
     test_image_dir.mkdir(parents=True, exist_ok=True)
 
@@ -35,15 +48,24 @@ def main():
 
     seed_everything(42)
 
+    # dataset = AdapterDataset()
+    # dataset = LaionStreamingDataset("laion/laion2B-en-aesthetic", split="train")
+    dataset = LaionFolderDataset("laion2B-en-aesthetic/laion_100gb_512px/")
+    dataloader = DataLoader(dataset, batch_size=4, shuffle=True, num_workers=2)
+
+
     sd_model_key = "stable-diffusion-v1-5/stable-diffusion-v1-5"
-    t5_model_key = "google-t5/t5-base"
+    # t5_model_key = "google-t5/t5-large"
+    t5_model_key = "google/t5-v1_1-xxl"
     device = "cuda"
 
     sd_pipe = DiffusionPipeline.from_pretrained(
-        sd_model_key, torch_dtype=torch.bfloat16, variant="fp16", safety_checker=None
+        sd_model_key,
+        # torch_dtype=torch.bfloat16,
+        safety_checker=None,
     ).to(device)
     max_text_seq_length = sd_pipe.text_encoder.config.max_position_embeddings
-    sd_pipe.enable_xformers_memory_efficient_attention()
+    # sd_pipe.enable_xformers_memory_efficient_attention()
     sd_pipe.set_progress_bar_config(leave=False)
 
     vae = sd_pipe.vae
@@ -56,6 +78,7 @@ def main():
         # .half()
         .requires_grad_(False)
     )
+    t5_encoder.eval()
 
     adapter = (
         TextEncoderAdapter(
@@ -64,50 +87,65 @@ def main():
         ).to(device)
         # .half()
     )
+    print(adapter)
 
     vae.requires_grad_(False)
     unet.requires_grad_(False)
     t5_encoder.requires_grad_(False)
     adapter.requires_grad_(True)
 
-    # dataset = AdapterDataset()
-    # dataset = LaionStreamingDataset("laion/laion2B-en-aesthetic", split="train")
-    dataset = LaionFolderDataset("laion2B-en-aesthetic/laion_100gb_512px/")
-    dataloader = DataLoader(dataset, batch_size=4, shuffle=True, num_workers=1)
+    optimizer = AdamW(adapter.parameters(), lr=1e-4)
 
     initial_step = 0
     if ckpt_path.exists():
-        adapter.load_state_dict(torch.load(ckpt_path))
-        print(f"Loaded adapter from {ckpt_path}")
+        checkpoint = torch.load(ckpt_path)
+        adapter.load_state_dict(checkpoint["adapter"])
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        initial_step = checkpoint["step"] + 1
+        print(f"Loaded checkpoint from {ckpt_path} at step {initial_step}")
 
-        test_image_files = list(test_image_dir.glob("*.png"))
-        test_image_files.sort(key=lambda x: int(x.stem))
-        last_test_image_file = test_image_files[-1]
-        initial_step = int(last_test_image_file.stem) + 1
-        print(f"Initial step: {initial_step}")
+    print(
+        f"Num trainable parameters: {sum(p.numel() for p in adapter.parameters() if p.requires_grad)}"
+    )
 
-    optimizer = AdamW(adapter.parameters(), lr=1e-4)
-    print(f"Num trainable parameters: {sum(p.numel() for p in adapter.parameters() if p.requires_grad)}")
+    # sanity_batch = next(iter(dataloader))
+    # noise = None
+    # timesteps = None
+
+    wandb.init(project="adapt-t5", entity="vinam-arora8", name=RUN_ID)
 
     step = initial_step
-    with torch.autocast("cuda", torch.bfloat16):
+    while True:
         for clean_images, captions in (pbar := tqdm(dataloader, initial=initial_step)):
+        # for _ in (pbar := tqdm(range(len(dataloader)), initial=initial_step)):
+            # clean_images, captions = sanity_batch
+
             if step % TEST_EVERY_N_STEP == 0:
                 try:
                     adapter.eval()
                     test_image = test_generation(
-                        t5_tokenizer, t5_encoder, adapter, sd_pipe
+                        t5_tokenizer, t5_encoder, adapter, sd_pipe, captions[0]
                     )
                     save_path = test_image_dir / f"{step}.png"
-                    test_image.save(save_path)
+                    save_image_with_caption(
+                        image=test_image,
+                        caption=captions[0],
+                        save_path=save_path,
+                    )
                 except Exception as e:
                     print(f"Error saving test image: {e}")
 
                 adapter.train()
-                torch.save(adapter.state_dict(), ckpt_path)
+                torch.save(
+                    {
+                        "adapter": adapter.state_dict(),
+                        "optimizer": optimizer.state_dict(),
+                        "step": step,
+                    },
+                    ckpt_path,
+                )
 
             clean_images = clean_images.to(device)  # [B, 3, 512, 512]
-            batch_size = len(captions)
 
             with torch.no_grad():
                 latents = vae.encode(clean_images).latent_dist.sample()
@@ -124,20 +162,22 @@ def main():
             noisy_latents = scheduler.add_noise(latents, noise, timesteps)
 
             with torch.no_grad():
-                text_emb = encode_prompt(
+                text_emb, mask = encode_prompt(
                     prompts=captions,
                     tokenizer=t5_tokenizer,
                     text_encoder=t5_encoder,
                     max_length=max_text_seq_length,
                 )
+                text_emb = text_emb.float()
 
-            adapted_embeds = adapter(text_emb)
+            adapted_embeds = adapter(text_emb, mask)
 
             # UNET
             noise_pred = unet(
                 sample=noisy_latents,
                 timestep=timesteps,
                 encoder_hidden_states=adapted_embeds,  # <--- INJECTED HERE
+                # encoder_attention_mask=mask,
             ).sample
 
             loss = F.mse_loss(noise_pred, noise)
@@ -146,54 +186,48 @@ def main():
             optimizer.step()
             optimizer.zero_grad()
 
-            pbar.set_description(f"Loss = {loss.item():.3f}")
+            pbar.set_description(
+                f"Loss = {loss.item():.3f}, Mask = {mask.float().mean().item():.3f}"
+                + f", Max = {clean_images.max().item():.3f}, Min = {clean_images.min().item():.3f}"
+            )
             step += 1
-            # print(f"Batch {step} loaded! Shape: {clean_images.shape}")
-            # print(f"Caption: {captions[0]}")
-            # print(f"{adapted_embeds.shape}")
 
-            # if step % 10 == 0:
-            #     print(f"Step {step} Loss: {loss.item()}")
+            wandb.log(
+                {
+                    "loss": loss.item(),
+                },
+                step=step,
+            )
 
 
 @torch.inference_mode()
-@torch.autocast("cuda", torch.bfloat16)
-def test_generation(tokenizer, text_encoder, adapter, sd_pipe):
-    prompt = "a futuristic city with flying cars"
-    embeds = encode_prompt(
+def test_generation(
+    tokenizer,
+    text_encoder,
+    adapter,
+    sd_pipe,
+    prompt="Cafe Latte in Round Red Cup and Saucer",
+):
+    embeds, mask = encode_prompt(
         [prompt, NEG_PROMPT],
         tokenizer=tokenizer,
         text_encoder=text_encoder,
         max_length=sd_pipe.text_encoder.config.max_position_embeddings,
     )
     # prompt_embeds, neg_embeds = embeds.chunk(2, dim=0)
-    prompt_embeds, neg_embeds = adapter(embeds).chunk(2, dim=0)
+    prompt_embeds, neg_embeds = adapter(embeds, mask).chunk(2, dim=0)
 
     image = sd_pipe(
         prompt_embeds=prompt_embeds,
         negative_prompt_embeds=neg_embeds,
         num_inference_steps=50,
-        guidance_scale=7.5,
+        guidance_scale=1.0,
+        # attention_mask=mask,
     ).images[0]
 
     return image
 
 
-class TextEncoderAdapter(nn.Module):
-    def __init__(self, input_dim: int, output_dim: int):
-        super().__init__()
-        self.input_dim = input_dim
-        self.output_dim = output_dim
-        self.adapter = nn.Sequential(
-            nn.Linear(input_dim, 4 * output_dim),
-            nn.Dropout(0.1),
-            nn.ReLU(),
-            nn.Linear(4 * output_dim, output_dim),
-            nn.LayerNorm(output_dim),
-        )
-
-    def forward(self, embeddings: Tensor) -> Tensor:
-        return self.adapter(embeddings)
 
 
 def encode_prompt(
@@ -219,64 +253,10 @@ def encode_prompt(
             attention_mask=text_inputs.attention_mask,
         ).last_hidden_state
 
-    mask = text_inputs.attention_mask.unsqueeze(-1).expand_as(text_embeds)
-    text_embeds = text_embeds * mask.to(text_embeds.device)
+    # mask = text_inputs.attention_mask.unsqueeze(-1).expand_as(text_embeds)
+    # text_embeds = text_embeds * mask.to(text_embeds.device)
 
-    return text_embeds
-
-
-
-import torch
-from torch.utils.data import IterableDataset, DataLoader
-from datasets import load_dataset
-from torchvision import transforms
-
-
-class LaionStreamingDataset(IterableDataset):
-    def __init__(self, dataset_name, split="train", buffer_size=1000):
-        self.buffer_size = buffer_size
-
-        # 1. Load the dataset in streaming mode (no download)
-        self.dataset = load_dataset(dataset_name, split=split, streaming=True)
-
-        # 2. Define image transforms (Resize to 512x512 for Stable Diffusion)
-        self.transform = transforms.Compose(
-            [
-                transforms.Resize(512),
-                transforms.CenterCrop(512),
-                transforms.ToTensor(),
-                transforms.Normalize([0.5], [0.5]),  # Map to [-1, 1] for Diffusion
-            ]
-        )
-
-    def __iter__(self):
-        # This generator yields (image_tensor, text_caption) pairs
-        for sample in self.dataset:
-            try:
-                # Extract data
-                # image = sample.get('image') or sample.get('jpg') # COCO uses 'image', LAION uses 'jpg'
-                url = sample.get("URL")
-                if url is None:
-                    continue
-                import requests
-                from io import BytesIO
-
-                response = requests.get(url)
-                image = Image.open(BytesIO(response.content))
-                text = sample.get("TEXT")
-
-                # Basic validation
-                if image is None or text is None:
-                    continue
-
-                # Apply transforms
-                image_tensor = self.transform(image.convert("RGB"))
-
-                yield image_tensor, text
-
-            except Exception as e:
-                # Skip broken images (common in streaming datasets)
-                continue
+    return text_embeds, text_inputs.attention_mask
 
 
 def seed_everything(seed: int = 42):
@@ -286,6 +266,41 @@ def seed_everything(seed: int = 42):
     torch.cuda.manual_seed_all(seed)
     # torch.backends.cudnn.deterministic = True
     # torch.backends.cudnn.benchmark = False
+
+
+def save_image_with_caption(image: Image, caption: str, save_path: Path):
+    # Copy image to editable format
+    img_with_caption = image.copy()
+    draw = ImageDraw.Draw(img_with_caption)
+    try:
+        font = ImageFont.truetype("arial.ttf", 24)
+    except Exception:
+        font = ImageFont.load_default()
+    # Calculate text size
+    try:
+        # PIL >= 8.0.0
+        bbox = font.getbbox(caption)
+        text_width, text_height = bbox[2] - bbox[0], bbox[3] - bbox[1]
+    except Exception:
+        try:
+            text_width, text_height = font.getsize(caption)
+        except Exception:
+            # fallback
+            text_width, text_height = 200, 30
+    padding = 16
+    # Draw a white rectangle at the top large enough for the caption
+    rect_x0, rect_y0 = 0, 0
+    rect_x1 = min(img_with_caption.width, text_width + 2 * padding)
+    rect_y1 = text_height + 2 * padding
+    draw.rectangle([(rect_x0, rect_y0), (rect_x1, rect_y1)], fill=(255, 255, 255))
+    # Draw the text over the white rectangle, slightly inset
+    draw.text(
+        (rect_x0 + padding, rect_y0 + padding),
+        caption,
+        fill=(0, 0, 0),
+        font=font,
+    )
+    img_with_caption.save(save_path)
 
 
 if __name__ == "__main__":
