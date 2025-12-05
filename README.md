@@ -23,6 +23,13 @@ uv pip install -v --no-build-isolation -U git+https://github.com/facebookresearc
 python pnp/run.py
 ```
 
+### Run PnP with T5
+
+```bash
+python pnp/run_t5.py
+```
+
+---
 
 # Original README
 This repository contains the implementation of the ICLR2024 paper "PnP Inversion: Boosting Diffusion-based Editing with 3 Lines of Code" 
